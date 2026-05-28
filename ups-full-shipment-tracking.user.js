@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         UPS.com - Extract all shipment tracking numbers
 // @namespace    https://github.com/ruffy314
-// @version      0.0.2
+// @version      0.0.3
 // @description  Clicks "Other packages in this shipment" and extracts all tracking numbers
 // @match        https://www.ups.com/track*
 // @downloadURL  file:///C:/_Code/ups-full-shipment-tracking/ups-full-shipment-tracking.user.js
@@ -12,50 +12,47 @@ function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
 }
 
+function isVisible(el) {
+  return el && el.offsetParent !== null;
+}
+
 /**
- * Find clickable element by exact visible text
- * (more reliable for React apps like UPS)
+ * Find clickable button by visible text
  */
-function findClickableByText(text) {
+function findClickable(text) {
   const lower = text.toLowerCase();
 
-  const candidates = document.querySelectorAll('a, button, [role="button"]');
+  const elements = document.querySelectorAll('a, button, [role="button"]');
 
-  for (const el of candidates) {
+  for (const el of elements) {
     const t = el.textContent?.trim().toLowerCase();
-    if (t && t.includes(lower)) {
-      return el;
-    }
+    if (!t || !t.includes(lower)) continue;
+
+    if (!isVisible(el)) continue;
+
+    return el.closest('button, a') || el;
   }
 
   return null;
 }
 
 /**
- * Retry until "Other packages" is found
+ * Open "Other packages"
  */
 async function openOtherPackages() {
   for (let i = 0; i < 10; i++) {
-    const btn = findClickableByText('other packages');
+    const btn = findClickable('other packages');
 
     if (btn) {
-      console.log('✅ Found "Other packages":', btn);
-
-      // Sometimes UPS attaches click to parent
-      let target = btn;
-      if (btn.closest('button, a')) {
-        target = btn.closest('button, a');
-      }
-
-      target.click();
+      console.log('✅ Clicking "Other packages"');
+      btn.click();
       return true;
     }
 
-    console.log('⏳ Waiting for "Other packages"... attempt', i + 1);
+    console.log(`⏳ Waiting for "Other packages" (${i + 1}/10)`);
     await sleep(1000);
   }
 
-  console.warn('❌ Could not find "Other packages"');
   return false;
 }
 
@@ -77,29 +74,33 @@ function extractTrackingNumbers() {
 }
 
 /**
- * Click Next (pagination)
+ * Try clicking "Next" safely
  */
-function clickNext() {
-  const btn = findClickableByText('next');
+function tryClickNext() {
+  const btn = findClickable('next');
 
-  if (btn && !btn.disabled) {
-    console.log('➡️ Clicking Next');
-    btn.click();
-    return true;
+  if (!btn) {
+    console.log('✅ No Next button found → done');
+    return false;
   }
 
-  return false;
+  if (btn.disabled || btn.getAttribute('aria-disabled') === 'true') {
+    console.log('✅ Next button disabled → done');
+    return false;
+  }
+
+  console.log('➡️ Clicking Next');
+  btn.click();
+  return true;
 }
 
 (async function () {
   'use strict';
 
-  console.log('🚀 Script start');
+  console.log('🚀 Start');
 
-  // ✅ required initial delay
   await sleep(3000);
 
-  // ✅ open list
   const opened = await openOtherPackages();
 
   if (opened) {
@@ -107,23 +108,35 @@ function clickNext() {
   }
 
   const all = new Set();
+  let lastSnapshot = '';
 
   while (true) {
     console.log('📦 Extracting page');
 
-    extractTrackingNumbers().forEach(n => all.add(n));
+    const currentNumbers = extractTrackingNumbers();
+    currentNumbers.forEach(n => all.add(n));
+
+    const snapshot = currentNumbers.join(',');
 
     await sleep(1500);
 
-    const next = clickNext();
-    if (!next) break;
+    const clicked = tryClickNext();
+    if (!clicked) break;
 
     await sleep(3000);
+
+    // ✅ detect if page didn't change → stop loop
+    const newNumbers = extractTrackingNumbers().join(',');
+
+    if (newNumbers === snapshot) {
+      console.log('✅ No new data after Next → stopping');
+      break;
+    }
   }
 
   const result = Array.from(all);
 
-  console.log('✅ Final result:', result);
+  console.log('✅ Final:', result);
 
   if (result.length) {
     const output = result.join('\n');
