@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         UPS.com - Extract all shipment tracking numbers
 // @namespace    https://github.com/ruffy314
-// @version      0.0.3
+// @version      0.0.4
 // @description  Clicks "Other packages in this shipment" and extracts all tracking numbers
 // @match        https://www.ups.com/track*
 // @downloadURL  file:///C:/_Code/ups-full-shipment-tracking/ups-full-shipment-tracking.user.js
@@ -16,35 +16,41 @@ function isVisible(el) {
   return el && el.offsetParent !== null;
 }
 
-/**
- * Find clickable button by visible text
- */
 function findClickable(text) {
   const lower = text.toLowerCase();
-
   const elements = document.querySelectorAll('a, button, [role="button"]');
 
   for (const el of elements) {
     const t = el.textContent?.trim().toLowerCase();
     if (!t || !t.includes(lower)) continue;
-
     if (!isVisible(el)) continue;
 
     return el.closest('button, a') || el;
   }
-
   return null;
 }
 
 /**
- * Open "Other packages"
+ * Heuristic: check if list is already open
+ * (we assume it's open if we already see multiple tracking numbers)
  */
-async function openOtherPackages() {
+function isOtherPackagesOpen() {
+  const regex = /\b1Z[0-9A-Z]{16}\b/g;
+  const matches = document.body.innerText.match(regex);
+  return matches && matches.length > 1;
+}
+
+async function openOtherPackagesIfNeeded() {
+  if (isOtherPackagesOpen()) {
+    console.log('✅ Other packages already open');
+    return true;
+  }
+
   for (let i = 0; i < 10; i++) {
     const btn = findClickable('other packages');
 
     if (btn) {
-      console.log('✅ Clicking "Other packages"');
+      console.log('✅ Opening "Other packages"');
       btn.click();
       return true;
     }
@@ -53,12 +59,10 @@ async function openOtherPackages() {
     await sleep(1000);
   }
 
+  console.warn('❌ Could not find "Other packages"');
   return false;
 }
 
-/**
- * Extract tracking numbers
- */
 function extractTrackingNumbers() {
   const set = new Set();
   const regex = /\b1Z[0-9A-Z]{16}\b/g;
@@ -73,19 +77,16 @@ function extractTrackingNumbers() {
   return Array.from(set);
 }
 
-/**
- * Try clicking "Next" safely
- */
 function tryClickNext() {
   const btn = findClickable('next');
 
   if (!btn) {
-    console.log('✅ No Next button found → done');
+    console.log('✅ No Next button → done');
     return false;
   }
 
   if (btn.disabled || btn.getAttribute('aria-disabled') === 'true') {
-    console.log('✅ Next button disabled → done');
+    console.log('✅ Next disabled → done');
     return false;
   }
 
@@ -94,14 +95,15 @@ function tryClickNext() {
   return true;
 }
 
-(async function () {
-  'use strict';
-
-  console.log('🚀 Start');
+/**
+ * MAIN PROCESS
+ */
+async function runExtractor() {
+  console.log('🚀 Extraction started');
 
   await sleep(3000);
 
-  const opened = await openOtherPackages();
+  const opened = await openOtherPackagesIfNeeded();
 
   if (opened) {
     await sleep(3000);
@@ -125,11 +127,10 @@ function tryClickNext() {
 
     await sleep(3000);
 
-    // ✅ detect if page didn't change → stop loop
     const newNumbers = extractTrackingNumbers().join(',');
 
     if (newNumbers === snapshot) {
-      console.log('✅ No new data after Next → stopping');
+      console.log('✅ No new data → stopping');
       break;
     }
   }
@@ -151,4 +152,48 @@ function tryClickNext() {
   } else {
     alert('❌ No tracking numbers found');
   }
+}
+
+/**
+ * CREATE FLOATING BUTTON
+ */
+function createButton() {
+  const btn = document.createElement('button');
+
+  btn.textContent = '🐒';
+  btn.title = 'try to get all parcel numbers';
+
+  Object.assign(btn.style, {
+    position: 'fixed',
+    top: '50vh',
+    right: '20px',
+    zIndex: 999999,
+    fontSize: '2.5em',
+    padding: '8px 10px',
+    borderRadius: '8px',
+    border: '1px solid #ccc',
+    background: '#fff',
+    cursor: 'pointer',
+    boxShadow: '0 2px 6px rgba(0,0,0,0.2)'
+  });
+
+  btn.addEventListener('click', () => {
+    btn.disabled = true;
+    btn.textContent = '⏳';
+
+    runExtractor().finally(() => {
+      btn.disabled = false;
+      btn.textContent = '🐒';
+    });
+  });
+
+  document.body.appendChild(btn);
+}
+
+/**
+ * INIT
+ */
+(function () {
+  'use strict';
+  createButton();
 })();
