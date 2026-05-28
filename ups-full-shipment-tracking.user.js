@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         UPS.com - Extract all shipment tracking numbers
 // @namespace    https://github.com/ruffy314
-// @version      0.0.4
+// @version      0.0.5
 // @description  Clicks "Other packages in this shipment" and extracts all tracking numbers
 // @match        https://www.ups.com/track*
 // @downloadURL  file:///C:/_Code/ups-full-shipment-tracking/ups-full-shipment-tracking.user.js
@@ -46,7 +46,7 @@ async function openOtherPackagesIfNeeded() {
     return true;
   }
 
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < 5; i++) {
     const btn = findClickable('other packages');
 
     if (btn) {
@@ -55,7 +55,7 @@ async function openOtherPackagesIfNeeded() {
       return true;
     }
 
-    console.log(`⏳ Waiting for "Other packages" (${i + 1}/10)`);
+    console.log(`⏳ Waiting for "Other packages" (${i + 1}/5)`);
     await sleep(1000);
   }
 
@@ -96,6 +96,90 @@ function tryClickNext() {
 }
 
 /**
+ * RESULTS POPUP
+ */
+function showResultsPopup(numbers) {
+  const overlay = document.createElement('div');
+  Object.assign(overlay.style, {
+    position: 'fixed',
+    inset: '0',
+    background: 'rgba(0,0,0,0.4)',
+    zIndex: 1000000,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: '16px'
+  });
+
+  const modal = document.createElement('div');
+  Object.assign(modal.style, {
+    background: '#fff',
+    borderRadius: '10px',
+    width: 'min(90vw, 650px)',
+    maxHeight: '80vh',
+    padding: '16px',
+    boxShadow: '0 8px 24px rgba(0,0,0,0.2)',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '12px'
+  });
+
+  const title = document.createElement('div');
+  title.textContent = `Found ${numbers.length} tracking number${numbers.length === 1 ? '' : 's'}`;
+  title.style.fontSize = '16px';
+  title.style.fontWeight = '600';
+
+  const helper = document.createElement('div');
+  helper.textContent = 'You can select and copy the list below.';
+  helper.style.color = '#555';
+  helper.style.fontSize = '12px';
+
+  const textarea = document.createElement('textarea');
+  textarea.readOnly = true;
+  textarea.value = numbers.join('\n');
+  Object.assign(textarea.style, {
+    width: '100%',
+    flex: '1 1 auto',
+    minHeight: '200px',
+    maxHeight: '50vh',
+    resize: 'vertical',
+    fontFamily: 'monospace',
+    fontSize: '12px',
+    lineHeight: '1.4',
+    padding: '8px',
+    borderRadius: '6px',
+    border: '1px solid #ddd',
+    boxSizing: 'border-box'
+  });
+
+  const buttonsRow = document.createElement('div');
+  Object.assign(buttonsRow.style, {
+    display: 'flex',
+    justifyContent: 'flex-end',
+    gap: '8px'
+  });
+
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = 'Close';
+  Object.assign(closeBtn.style, {
+    padding: '8px 12px',
+    borderRadius: '6px',
+    border: '1px solid #ccc',
+    background: '#f6f6f6',
+    cursor: 'pointer'
+  });
+  closeBtn.addEventListener('click', () => overlay.remove());
+
+  buttonsRow.appendChild(closeBtn);
+  modal.appendChild(title);
+  modal.appendChild(helper);
+  modal.appendChild(textarea);
+  modal.appendChild(buttonsRow);
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+}
+
+/**
  * MAIN PROCESS
  */
 async function runExtractor() {
@@ -110,7 +194,6 @@ async function runExtractor() {
   }
 
   const all = new Set();
-  let lastSnapshot = '';
 
   while (true) {
     console.log('📦 Extracting page');
@@ -136,22 +219,10 @@ async function runExtractor() {
   }
 
   const result = Array.from(all);
-
   console.log('✅ Final:', result);
 
-  if (result.length) {
-    const output = result.join('\n');
-
-    if (typeof GM_setClipboard !== 'undefined') {
-      GM_setClipboard(output);
-    } else {
-      navigator.clipboard.writeText(output);
-    }
-
-    alert(`✅ ${result.length} tracking numbers copied`);
-  } else {
-    alert('❌ No tracking numbers found');
-  }
+  // Show popup with results
+  showResultsPopup(result);
 }
 
 /**
@@ -172,7 +243,7 @@ function createButton() {
     padding: '8px 10px',
     borderRadius: '8px',
     border: '1px solid #ccc',
-    background: '#fff',
+    background: 'linear-gradient(to bottom, #b7eefb 35%, #87ceeb 55%, #6cbb37 65%, #3cab07 90%)',
     cursor: 'pointer',
     boxShadow: '0 2px 6px rgba(0,0,0,0.2)'
   });
