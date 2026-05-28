@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         UPS.com - Extract all shipment tracking numbers
 // @namespace    https://github.com/ruffy314
-// @version      0.0.5
+// @version      0.0.6
 // @description  Clicks "Other packages in this shipment" and extracts all tracking numbers
 // @match        https://www.ups.com/track*
 // @downloadURL  file:///C:/_Code/ups-full-shipment-tracking/ups-full-shipment-tracking.user.js
@@ -177,7 +177,14 @@ function showResultsPopup(numbers) {
   modal.appendChild(buttonsRow);
   overlay.appendChild(modal);
   document.body.appendChild(overlay);
+
+  // Auto-focus and select all so the user can press Ctrl/Cmd+C immediately
+  setTimeout(() => {
+    textarea.focus();
+    textarea.select();
+  }, 0);
 }
+
 
 /**
  * MAIN PROCESS
@@ -243,7 +250,7 @@ function createButton() {
     padding: '8px 10px',
     borderRadius: '8px',
     border: '1px solid #ccc',
-    background: 'linear-gradient(to bottom, #b7eefb 35%, #87ceeb 55%, #6cbb37 65%, #3cab07 90%)',
+    background: 'linear-gradient(to bottom, #81c8f1 15%, #b7eefb 55%, #b7d87b 65%, #6ac441 90%)',
     cursor: 'pointer',
     boxShadow: '0 2px 6px rgba(0,0,0,0.2)'
   });
