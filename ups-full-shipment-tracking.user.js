@@ -4,7 +4,7 @@
 // @version      0.0.1
 // @description  Clicks "Other packages in this shipment" and extracts all tracking numbers
 // @match        https://www.ups.com/track*
-// @grant        GM_setClipboard
+// @downloadURL  https://cdn.jsdelivr.net/gh/Ruffy314/ups-full-shipment-tracking@main/ups-full-shipment-tracking.user.js
 // ==/UserScript==
 
 function sleep(ms) {
