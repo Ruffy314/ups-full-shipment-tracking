@@ -1,42 +1,155 @@
 // ==UserScript==
 // @name         UPS.com - Extract all shipment tracking numbers
 // @namespace    https://github.com/ruffy314
-// @version      0.0.1
+// @version      0.1.0
 // @description  Clicks "Other packages in this shipment" and extracts all tracking numbers
 // @match        https://www.ups.com/track*
 // @downloadURL  https://cdn.jsdelivr.net/gh/Ruffy314/ups-full-shipment-tracking@main/ups-full-shipment-tracking.user.js
 // ==/UserScript==
 
-function sleep(ms) {
-  return new Promise(r => setTimeout(r, ms));
-}
+const documentLanguage = (document.documentElement.lang || 'en').split(/[-_]/)[0];
+
+/**
+ * Localized UI phrases and synonyms for robust matching.
+ * Add future languages by extending the object below.
+ */
+/** @type {Record<string, {othersPhrases: string[], nextPhrases: string[], resultText: string, ariaNext?: string}>} */
+const localizationStrings = {
+  en: {
+    othersPhrases: [
+      'other packages',
+      'other packages in this shipment'
+    ],
+    nextPhrases: ['next'],
+    resultText: 'You can copy the list below.',
+    // In both EN and DE snapshots, aria-label for Next remains "next"
+    ariaNext: 'next',
+  },
+  de: {
+    othersPhrases: [
+      'weitere pakete',
+      'weitere pakete in dieser sendung'
+    ],
+    // Include common synonyms; we will use word-boundary matching
+    nextPhrases: ['weiter', 'nächste'],
+    resultText: 'Sie können die folgende Liste kopieren.',
+    ariaNext: 'next',
+  },
+};
+
+const uiTexts = localizationStrings[documentLanguage] ?? localizationStrings.en;
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 function isVisible(el) {
-  return el && el.offsetParent !== null;
+  if (!el) return false;
+  const style = window.getComputedStyle(el);
+  const rect = el.getBoundingClientRect();
+  return (
+    el.offsetParent !== null &&
+    style.visibility !== 'hidden' &&
+    style.display !== 'none' &&
+    rect.width > 0 &&
+    rect.height > 0
+  );
 }
 
-function findClickable(text) {
-  const lower = text.toLowerCase();
-  const elements = document.querySelectorAll('a, button, [role="button"]');
+function normalizeText(s) {
+  return (s || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim();
+}
 
-  for (const el of elements) {
-    const t = el.textContent?.trim().toLowerCase();
-    if (!t || !t.includes(lower)) continue;
-    if (!isVisible(el)) continue;
+function escapeRegex(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
-    return el.closest('button, a') || el;
+function wordBoundaryIncludes(haystack, needle) {
+  const h = normalizeText(haystack);
+  const n = normalizeText(needle);
+  try {
+    const re = new RegExp(`\\b${escapeRegex(n)}\\b`, 'i');
+    return re.test(h);
+  } catch { return h.includes(n); }
+}
+
+function textMatchesAny(el, phrases) {
+  const t = normalizeText(el.textContent || '');
+  return phrases.some(p => wordBoundaryIncludes(t, p));
+}
+
+function queryVisibleAll(selector, root = document) {
+  return Array.from(root.querySelectorAll(selector)).filter(isVisible);
+}
+
+function findAdditionalPackagesToggle() {
+  // 1) Most robust (current app): aria-controls points to the drawer id
+  const byAria = document.querySelector('button[aria-controls="stApp_multiPieceShipmentContent"]');
+  if (isVisible(byAria)) return byAria;
+
+  // 2) Fallback: find a section card header button with a title matching the localized phrases
+  const candidates = queryVisibleAll('button.custom-title-button');
+  for (const btn of candidates) {
+    const heading = btn.querySelector('h2, h3, .card-title-heading');
+    if (!heading) continue;
+    if (textMatchesAny(heading, uiTexts.othersPhrases)) {
+      return btn;
+    }
+  }
+
+  // 3) Last resort: visible buttons with matching text anywhere, but prefer those controlling a drawer
+  const buttons = queryVisibleAll('button, [role="button"]');
+  for (const b of buttons) {
+    if (textMatchesAny(b, uiTexts.othersPhrases)) {
+      const controls = b.getAttribute('aria-controls');
+      if (controls && document.getElementById(controls)) return b;
+    }
+  }
+  for (const b of buttons) {
+    if (textMatchesAny(b, uiTexts.othersPhrases)) return b;
+  }
+
+  return null;
+}
+
+function getDrawerFromToggle(toggle) {
+  if (!toggle) return null;
+  const id = toggle.getAttribute('aria-controls');
+  if (id) {
+    const target = document.getElementById(id);
+    if (target) return target;
+  }
+  // Fallback: nearest drawer-content in the same card
+  const card = toggle.closest('.ups-appCard, ups-card, .ups-card');
+  const drawer = card ? card.querySelector('.drawer-content') : null;
+  return drawer || null;
+}
+
+function findOpenDrawer() {
+  // Priority: known id with expanded class
+  const byId = document.getElementById('stApp_multiPieceShipmentContent');
+  if (byId && isVisible(byId) && byId.classList.contains('drawer-expanded')) return byId;
+
+  // Otherwise: any visible expanded drawer-content that contains tracking rows/links
+  const drawers = queryVisibleAll('.drawer-content.drawer-expanded');
+  for (const d of drawers) {
+    const hasPagination = !!d.querySelector('app-ups-client-pagination, .ups-pagination-wrapper');
+    const has1Z = /\b1Z[0-9A-Z]{16}\b/.test(d.textContent || '');
+    if (hasPagination || has1Z) return d;
   }
   return null;
 }
 
-/**
- * Heuristic: check if list is already open
- * (we assume it's open if we already see multiple tracking numbers)
- */
 function isOtherPackagesOpen() {
-  const regex = /\b1Z[0-9A-Z]{16}\b/g;
-  const matches = document.body.innerText.match(regex);
-  return matches && matches.length > 1;
+  const toggle = findAdditionalPackagesToggle();
+  const drawer = findOpenDrawer();
+  if (toggle && normalizeText(toggle.getAttribute('aria-expanded')) === 'true') return true;
+  if (drawer) return true;
+  // Last resort: multiple tracking numbers visible on body
+  const matches = (document.body.innerText || '').match(/\b1Z[0-9A-Z]{16}\b/g);
+  return !!(matches && matches.length > 1);
 }
 
 async function openOtherPackagesIfNeeded() {
@@ -45,46 +158,107 @@ async function openOtherPackagesIfNeeded() {
     return true;
   }
 
-  for (let i = 0; i < 5; i++) {
-    const btn = findClickable('other packages');
-
-    if (btn) {
-      console.log('✅ Opening "Other packages"');
-      btn.click();
-      return true;
-    }
-
-    console.log(`⏳ Waiting for "Other packages" (${i + 1}/5)`);
-    await sleep(1000);
+  const toggle = findAdditionalPackagesToggle();
+  if (!toggle) {
+    console.warn('❌ Could not find the "Other packages" toggle');
+    return false;
   }
 
-  console.warn('❌ Could not find "Other packages"');
+  const drawer = getDrawerFromToggle(toggle);
+  const alreadyExpanded = normalizeText(toggle.getAttribute('aria-expanded')) === 'true' || (drawer && drawer.classList.contains('drawer-expanded'));
+  if (alreadyExpanded) return true;
+
+  console.log('✅ Opening "Other packages"');
+  toggle.click();
+
+  // Wait for expansion (aria or class change or more 1Z numbers appear)
+  for (let i = 0; i < 10; i++) {
+    await sleep(300);
+    const d = findOpenDrawer();
+    if (d) return true;
+  }
+
+  console.warn('❌ Drawer did not expand');
+  return false;
+}
+
+function getNextButtonInDrawer(drawer) {
+  if (!drawer) return null;
+
+  // Scope: identify a pagination root inside drawer
+  const scope = drawer.querySelector('.ups-pagination-wrapper, app-ups-client-pagination') || drawer;
+
+  // 1) Prefer known id within scope
+  let btn = scope.querySelector('#stApp_pagination_nextBtn');
+  if (isVisible(btn)) return btn;
+
+  // 2) Class-based next button inside pagination wrapper
+  btn = scope.querySelector('.ups-pagination-btn_next');
+  if (isVisible(btn)) return btn;
+
+  // 3) aria-label based (UPS keeps aria-label="next" across locales per snapshots)
+  if (uiTexts.ariaNext) {
+    btn = scope.querySelector(`[aria-label="${uiTexts.ariaNext}"]`);
+    if (isVisible(btn)) return btn;
+  }
+
+  // 4) Icon/right-arrow based within pagination wrapper
+  const candidates = queryVisibleAll('button, [role="button"]', scope);
+  for (const c of candidates) {
+    const hasRightIcon = c.querySelector('.ups-icon-right-arrow, [aria-hidden="true"].ups-icon-right-arrow, .icon.ups-icon-right-arrow, .chevron-right, .icon-chevron-right');
+    if (hasRightIcon && isVisible(c)) return c;
+  }
+
+  // 5) Text fallback (word-boundary) limited to scope to avoid global noise
+  for (const c of candidates) {
+    const t = normalizeText(c.textContent || '');
+    if (!t) continue;
+    if (uiTexts.nextPhrases.some(p => wordBoundaryIncludes(t, p))) return c;
+  }
+
+  return null;
+}
+
+function isDisabled(btn) {
+  if (!btn) return true;
+  if (btn.disabled) return true;
+  const aria = normalizeText(btn.getAttribute('aria-disabled'));
+  if (aria === 'true') return true;
   return false;
 }
 
 function extractTrackingNumbers() {
   const set = new Set();
   const regex = /\b1Z[0-9A-Z]{16}\b/g;
-
-  const text = document.body.innerText;
+  const text = document.body.innerText || '';
   const matches = text.match(regex);
+  if (matches) matches.forEach(m => set.add(m));
+  return Array.from(set);
+}
 
-  if (matches) {
-    matches.forEach(m => set.add(m));
-  }
-
+function extractTrackingNumbersInDrawer(drawer) {
+  if (!drawer) return [];
+  const set = new Set();
+  const regex = /\b1Z[0-9A-Z]{16}\b/g;
+  const text = drawer.innerText || '';
+  const matches = text.match(regex);
+  if (matches) matches.forEach(m => set.add(m));
   return Array.from(set);
 }
 
 function tryClickNext() {
-  const btn = findClickable('next');
+  const drawer = findOpenDrawer();
+  if (!drawer) {
+    console.log('ℹ️ No open drawer found for pagination');
+    return false;
+  }
 
+  const btn = getNextButtonInDrawer(drawer);
   if (!btn) {
     console.log('✅ No Next button → done');
     return false;
   }
-
-  if (btn.disabled || btn.getAttribute('aria-disabled') === 'true') {
+  if (isDisabled(btn)) {
     console.log('✅ Next disabled → done');
     return false;
   }
@@ -129,7 +303,7 @@ function showResultsPopup(numbers) {
   title.style.fontWeight = '600';
 
   const helper = document.createElement('div');
-  helper.textContent = 'You can select and copy the list below.';
+  helper.textContent = uiTexts.resultText;
   helper.style.color = '#555';
   helper.style.fontSize = '12px';
 
@@ -177,13 +351,11 @@ function showResultsPopup(numbers) {
   overlay.appendChild(modal);
   document.body.appendChild(overlay);
 
-  // Auto-focus and select all so the user can press Ctrl/Cmd+C immediately
   setTimeout(() => {
     textarea.focus();
     textarea.select();
   }, 0);
 }
-
 
 /**
  * MAIN PROCESS
@@ -191,43 +363,35 @@ function showResultsPopup(numbers) {
 async function runExtractor() {
   console.log('🚀 Extraction started');
 
-  await sleep(3000);
-
   const opened = await openOtherPackagesIfNeeded();
-
-  if (opened) {
-    await sleep(3000);
-  }
+  if (opened) await sleep(1000);
 
   const all = new Set();
+  let page = 1;
 
   while (true) {
-    console.log('📦 Extracting page');
-
+    console.log(`📦 Extracting page ${page}`);
     const currentNumbers = extractTrackingNumbers();
     currentNumbers.forEach(n => all.add(n));
 
     const snapshot = currentNumbers.join(',');
-
-    await sleep(1500);
+    await sleep(1000);
 
     const clicked = tryClickNext();
     if (!clicked) break;
 
-    await sleep(3000);
+    await sleep(2500);
 
     const newNumbers = extractTrackingNumbers().join(',');
-
     if (newNumbers === snapshot) {
       console.log('✅ No new data → stopping');
       break;
     }
+    page += 1;
   }
 
   const result = Array.from(all);
   console.log('✅ Final:', result);
-
-  // Show popup with results
   showResultsPopup(result);
 }
 
@@ -236,7 +400,6 @@ async function runExtractor() {
  */
 function createButton() {
   const btn = document.createElement('button');
-
   btn.textContent = '🐒';
   btn.title = 'try to get all parcel numbers';
 
@@ -257,7 +420,6 @@ function createButton() {
   btn.addEventListener('click', () => {
     btn.disabled = true;
     btn.textContent = '⏳';
-
     runExtractor().finally(() => {
       btn.disabled = false;
       btn.textContent = '🐒';
@@ -274,3 +436,4 @@ function createButton() {
   'use strict';
   createButton();
 })();
+
