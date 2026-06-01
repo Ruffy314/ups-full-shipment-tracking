@@ -1,12 +1,23 @@
 // ==UserScript==
-// @name         UPS.com - Extract all shipment tracking numbers
+// @name         UPS.com - Extract all shipment tracking numbers (dev)
 // @namespace    https://github.com/ruffy314
-// @version      0.0.6
+// @version      0.0.7
 // @description  Clicks "Other packages in this shipment" and extracts all tracking numbers
 // @match        https://www.ups.com/track*
 // @downloadURL  file:///C:/_Code/ups-full-shipment-tracking/ups-full-shipment-tracking.user.js
 // @grant        GM_setClipboard
 // ==/UserScript==
+
+const documentLanguage = document.documentElement.lang; // for example "en" or "de"
+
+/**@type {Record<string, {others: string, next: string, resultText: string}} */
+const localizationStrings = {
+  "en": { others: "other packages", next: "next", resultText: "You can copy the list below." },
+  "de": { others: "weitere pakete", next: "weiter", resultText: "Sie können die folgende Liste kopieren." },
+}
+
+/** @type {{others: string, next: string, resultText: string}} */
+const uiTexts = localizationStrings[documentLanguage] ?? localizationStrings["en"];
 
 function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
@@ -47,7 +58,7 @@ async function openOtherPackagesIfNeeded() {
   }
 
   for (let i = 0; i < 5; i++) {
-    const btn = findClickable('other packages');
+    const btn = findClickable(uiTexts.others);
 
     if (btn) {
       console.log('✅ Opening "Other packages"');
@@ -78,7 +89,7 @@ function extractTrackingNumbers() {
 }
 
 function tryClickNext() {
-  const btn = findClickable('next');
+  const btn = findClickable(uiTexts.next);
 
   if (!btn) {
     console.log('✅ No Next button → done');
@@ -130,7 +141,7 @@ function showResultsPopup(numbers) {
   title.style.fontWeight = '600';
 
   const helper = document.createElement('div');
-  helper.textContent = 'You can select and copy the list below.';
+  helper.textContent = uiTexts.resultText;
   helper.style.color = '#555';
   helper.style.fontSize = '12px';
 
@@ -191,8 +202,6 @@ function showResultsPopup(numbers) {
  */
 async function runExtractor() {
   console.log('🚀 Extraction started');
-
-  await sleep(3000);
 
   const opened = await openOtherPackagesIfNeeded();
 
